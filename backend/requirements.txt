@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-dotenv
+langchain-google-genai
+langchain-community
+# langchain-core==0.1.2
+langchain-core
+langchain-text-splitters
+tavily-python
+python-multipart
+supabase
+stripe
+

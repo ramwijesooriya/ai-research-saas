@@ -1,0 +1,23 @@
+# Ignore Environment Variables (මේවා කවදාවත් යවන්න එපා)
+.env
+.env.local
+.env.production
+.env.development
+
+# Ignore Node Modules (Frontend)
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# Ignore Python specific (Backend)
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.pytest_cache/
+
+# OS specific
+.DS_Store
