@@ -140,7 +140,7 @@ export default function Home() {
           <div className="flex items-center gap-2">
             <TrendingUp className="w-8 h-8 text-indigo-600" />
             <h1 className="text-2xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent hidden sm:block">
-              AI ResearchPro
+              AI ResearchPro.    I LOVE YOU NIMASHA ❤️
             </h1>
           </div>
 
