@@ -2,33 +2,48 @@
 import { useState, useEffect } from "react";
 import { useUser, UserButton, SignInButton } from "@clerk/nextjs";
 import ReactMarkdown from "react-markdown";
-import { Loader2, Search, FileText, TrendingUp, Zap, CheckCircle, X } from "lucide-react";
+import { 
+  Loader2, Search, FileText, TrendingUp, Zap, CheckCircle, 
+  X, LayoutDashboard, Clock, ChevronRight, Menu 
+} from "lucide-react";
+
+// History Item Interface
+interface HistoryItem {
+  id: string; // Database ID
+  topic: string;
+  report: string;
+  sources: string[];
+  created_at?: string; // Database timestamp
+}
 
 export default function Home() {
   const { isSignedIn, user } = useUser();
+  
+  // Main States
   const [topic, setTopic] = useState("");
   const [report, setReport] = useState("");
   const [sources, setSources] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   
-  // New States for Credits, Tier & Modal
+  // History State (Database Data)
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+
+  // Credits & Tier
   const [credits, setCredits] = useState<number | null>(null);
-  const [tier, setTier] = useState("Free"); // Added Tier state
+  const [tier, setTier] = useState("Free");
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
-  const exampleTopics = [
-    "AI trends in healthcare 2025",
-    "Electric vehicle market in India",
-    "Future of remote work technology"
-  ];
-
-  // 1. Fetch Credits on Load
+  // 1. Fetch Credits & History on Load
   useEffect(() => {
     if (isSignedIn && user) {
       fetchCredits();
+      fetchHistory(); // <--- New Database Call
     }
   }, [isSignedIn, user]);
+
+  // --- API Functions ---
 
   async function fetchCredits() {
     try {
@@ -37,52 +52,53 @@ export default function Home() {
       if (res.ok) {
         const data = await res.json();
         setCredits(data.credits);
-        setTier(data.tier || "Free"); // Set the tier from backend
+        setTier(data.tier || "Free");
       }
     } catch (error) {
       console.error("Failed to fetch credits", error);
     }
   }
 
-  // --- Handle Upgrade / Top-up Function ---
+  // New: Get History from Database
+  async function fetchHistory() {
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const res = await fetch(`${apiUrl}/history/${user?.id}`);
+      if (res.ok) {
+        const data = await res.json();
+        setHistory(data); // Set database data to state
+      }
+    } catch (error) {
+      console.error("Failed to fetch history", error);
+    }
+  }
+
   async function handleUpgrade() {
     try {
       setLoading(true); 
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      
       const res = await fetch(`${apiUrl}/create-checkout-session`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          user_id: user?.id,
-        }),
+        body: JSON.stringify({ user_id: user?.id }),
       });
-
       const data = await res.json();
-      
-      // Redirect to Stripe
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        alert("Failed to initiate payment");
-      }
-      
+      if (data.url) window.location.href = data.url;
     } catch (error) {
-      console.error("Payment Error:", error);
-      alert("Something went wrong with payment initiation.");
+      alert("Payment Error");
     } finally {
       setLoading(false);
     }
   }
 
+  // --- Generate Function (With DB Save) ---
   async function handleGenerate() {
     if (!topic.trim() || topic.length < 5) {
       setError("Please enter at least 5 characters");
       return;
     }
-
     if (credits !== null && credits <= 0) {
-      setShowUpgradeModal(true); // Open modal if no credits
+      setShowUpgradeModal(true);
       return;
     }
 
@@ -94,6 +110,7 @@ export default function Home() {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       
+      // 1. Generate Report
       const res = await fetch(`${apiUrl}/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -104,24 +121,39 @@ export default function Home() {
       });
 
       if (!res.ok) {
-        const errorData = await res.json();
-        // Handle specific credit error
         if (res.status === 402) {
             setShowUpgradeModal(true);
             throw new Error("Insufficient credits");
         }
-        throw new Error(errorData.detail || "Failed to generate report");
+        throw new Error("Failed to generate report");
       }
 
       const data = await res.json();
-      setReport(data.report);
-      setSources(data.sources || []);
+      const newReport = data.report;
+      const newSources = data.sources || [];
       
-      // Update credits from response
-      if (data.credits_left !== undefined) {
-        setCredits(data.credits_left);
-      }
+      setReport(newReport);
+      setSources(newSources);
       
+      if (data.credits_left !== undefined) setCredits(data.credits_left);
+
+      // 2. SAVE TO DATABASE (Production Logic)
+      const historyPayload = {
+        user_id: user?.id || "anonymous",
+        topic: topic,
+        report: newReport,
+        sources: newSources
+      };
+
+      await fetch(`${apiUrl}/history`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(historyPayload),
+      });
+
+      // 3. Refresh List from Database
+      fetchHistory();
+
     } catch (err: any) {
       if (err.message !== "Insufficient credits") {
         setError(err.message || "Error generating report.");
@@ -131,259 +163,210 @@ export default function Home() {
     }
   }
 
+  // History Item Select Logic
+  function loadHistoryItem(item: HistoryItem) {
+    setTopic(item.topic);
+    setReport(item.report);
+    setSources(item.sources);
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-purple-50">
+    <div className="flex h-screen bg-gray-50 overflow-hidden">
       
-      {/* Header */}
-      <nav className="border-b bg-white/80 backdrop-blur-sm sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <TrendingUp className="w-8 h-8 text-indigo-600" />
-            <h1 className="text-2xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent hidden sm:block">
+      {/* 1. LEFT SIDEBAR (History) */}
+      {isSignedIn && (
+        <aside 
+          className={`${sidebarOpen ? "w-64" : "w-0"} bg-slate-900 text-white transition-all duration-300 flex flex-col relative overflow-hidden`}
+        >
+          {/* Sidebar Header */}
+          <div className="p-4 border-b border-slate-800 flex items-center gap-2 overflow-hidden">
+            <LayoutDashboard className="w-6 h-6 text-indigo-400" />
+            <span className="font-bold text-lg whitespace-nowrap">My Research</span>
+          </div>
+
+          {/* History List */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-2">
+            <p className="text-xs text-slate-500 font-semibold mb-2 uppercase tracking-wider">Recent</p>
+            {history.length === 0 && (
+              <p className="text-sm text-slate-600 italic">No history yet...</p>
+            )}
+            {history.map((item) => (
+              <button
+                key={item.id} // Supabase ID is unique
+                onClick={() => loadHistoryItem(item)}
+                className="w-full text-left p-3 rounded-lg hover:bg-slate-800 transition group flex items-center justify-between"
+              >
+                <div className="flex items-center gap-2 overflow-hidden">
+                  <Clock className="w-4 h-4 text-slate-500 group-hover:text-indigo-400" />
+                  <span className="text-sm text-slate-300 truncate w-32">{item.topic}</span>
+                </div>
+                <ChevronRight className="w-3 h-3 text-slate-600 opacity-0 group-hover:opacity-100" />
+              </button>
+            ))}
+          </div>
+
+          {/* User Profile at Bottom */}
+          <div className="p-4 border-t border-slate-800 bg-slate-950">
+            <div className="flex items-center gap-3">
+              <UserButton afterSignOutUrl="/" />
+              <div className="overflow-hidden">
+                <p className="text-sm font-medium truncate">{user?.firstName}</p>
+                <p className="text-xs text-slate-500 truncate">{tier} Plan</p>
+              </div>
+            </div>
+          </div>
+        </aside>
+      )}
+
+      {/* 2. MAIN CONTENT AREA */}
+      <div className="flex-1 flex flex-col h-screen overflow-hidden">
+        
+        {/* Top Header */}
+        <header className="bg-white border-b border-gray-200 p-4 flex justify-between items-center shadow-sm z-10">
+          <div className="flex items-center gap-3">
+            {isSignedIn && (
+              <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-2 hover:bg-gray-100 rounded-lg">
+                <Menu className="w-5 h-5 text-gray-600" />
+              </button>
+            )}
+            <h1 className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
               AI ResearchPro
             </h1>
           </div>
 
           <div className="flex items-center gap-4">
-            {isSignedIn && credits !== null && (
-              <div 
-                className="flex items-center gap-3 bg-white border border-gray-200 px-4 py-2 rounded-full shadow-sm cursor-pointer hover:bg-gray-50 transition"
-                onClick={() => setShowUpgradeModal(true)}
-              >
-                {/* PRO Badge - Only shows if user is Tier 'Pro' */}
-                {tier === "Pro" && (
-                  <span className="bg-gradient-to-r from-amber-400 to-orange-500 text-white text-xs font-bold px-2 py-0.5 rounded uppercase tracking-wider">
-                    PRO
-                  </span>
-                )}
-                
-                <div className="flex items-center gap-2">
-                  <Zap className={`w-4 h-4 ${credits > 0 ? 'text-amber-500 fill-amber-500' : 'text-gray-400'}`} />
-                  <span className="text-sm font-semibold text-gray-700">
-                    {credits} Credits
-                  </span>
-                </div>
-              </div>
-            )}
-            
-            {isSignedIn ? (
-              <UserButton afterSignOutUrl="/" />
-            ) : (
-              <SignInButton mode="modal">
-                <button className="bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition">
-                  Sign In
-                </button>
-              </SignInButton>
-            )}
+             {isSignedIn && credits !== null && (
+               <div 
+                 className="flex items-center gap-2 bg-indigo-50 px-3 py-1.5 rounded-full border border-indigo-100 cursor-pointer hover:bg-indigo-100 transition"
+                 onClick={() => setShowUpgradeModal(true)}
+               >
+                 <Zap className={`w-4 h-4 ${credits > 0 ? 'text-amber-500 fill-amber-500' : 'text-gray-400'}`} />
+                 <span className="text-sm font-bold text-indigo-900">{credits} Credits</span>
+               </div>
+             )}
+             {!isSignedIn && (
+               <SignInButton mode="modal">
+                 <button className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700">Sign In</button>
+               </SignInButton>
+             )}
           </div>
-        </div>
-      </nav>
+        </header>
 
-      {/* Main Content */}
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        {!isSignedIn ? (
-          // Landing Page
-          <div className="text-center mt-20 space-y-8">
-            <div className="inline-block p-3 bg-indigo-100 rounded-full mb-4">
-              <FileText className="w-12 h-12 text-indigo-600" />
-            </div>
-            <h2 className="text-5xl font-bold text-gray-900 mb-4">
-              Research Faster.<br />
-              <span className="bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
-                Decide Smarter.
-              </span>
-            </h2>
-            <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-              Generate comprehensive market research reports in seconds using AI. 
-              Perfect for investors, entrepreneurs, and business analysts.
-            </p>
-            <SignInButton mode="modal">
-              <button className="bg-indigo-600 text-white text-lg px-8 py-4 rounded-xl hover:bg-indigo-700 transition shadow-lg hover:shadow-xl transform hover:-translate-y-0.5">
-                Get Started Free →
-              </button>
-            </SignInButton>
-             
-             <div className="grid md:grid-cols-3 gap-6 mt-16 text-left">
-              {[
-                { icon: Search, title: "Deep Research", desc: "AI searches multiple sources automatically" },
-                { icon: FileText, title: "Professional Reports", desc: "Structured, citation-backed analysis" },
-                { icon: TrendingUp, title: "Market Insights", desc: "Stay ahead with latest trends" }
-              ].map((feature, i) => (
-                <div key={i} className="p-6 bg-white rounded-xl shadow-sm border border-gray-100">
-                  <feature.icon className="w-8 h-8 text-indigo-600 mb-3" />
-                  <h3 className="font-semibold text-lg mb-2">{feature.title}</h3>
-                  <p className="text-gray-600 text-sm">{feature.desc}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : (
-          // Dashboard
-          <div className="space-y-8">
-            <div className="bg-white p-8 rounded-2xl shadow-sm border border-gray-100">
-              <label className="block text-sm font-medium text-gray-700 mb-3">
-                What do you want to research?
-              </label>
-              
-              <div className="flex gap-3 mb-4">
-                <input
-                  type="text"
-                  value={topic}
-                  onChange={(e) => {
-                    setTopic(e.target.value);
-                    setError("");
-                  }}
-                  placeholder="e.g., Future of quantum computing in finance"
-                  // className="flex-1 p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-lg"
-                  className="flex-1 p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-lg text-gray-900 bg-white placeholder-gray-400"
-                  disabled={loading}
-                  onKeyPress={(e) => e.key === "Enter" && handleGenerate()}
-                />
-                <button
-                  onClick={handleGenerate}
-                  disabled={loading || !topic.trim()}
-                  className="bg-indigo-600 text-white px-8 py-4 rounded-xl font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition shadow-sm hover:shadow-md flex items-center gap-2 whitespace-nowrap"
-                >
-                  {loading ? (
-                    <>
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                      Analyzing...
-                    </>
-                  ) : (
-                    <>
-                      <Search className="w-5 h-5" />
-                      Generate
-                    </>
-                  )}
-                </button>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                <span className="text-sm text-gray-500">Try:</span>
-                {exampleTopics.map((ex, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setTopic(ex)}
-                    className="text-sm px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full hover:bg-indigo-100 transition"
-                    disabled={loading}
-                  >
-                    {ex}
+        {/* Scrollable Content */}
+        <main className="flex-1 overflow-y-auto p-4 md:p-8 relative">
+          
+          {/* Landing View (If not signed in) */}
+          {!isSignedIn ? (
+             <div className="max-w-4xl mx-auto text-center mt-20">
+                <h2 className="text-4xl font-bold text-gray-900 mb-6">
+                  Research Faster. Decide Smarter.
+                </h2>
+                <p className="text-xl text-gray-600 mb-8">
+                  The professional AI tool for deep market research.
+                </p>
+                <SignInButton mode="modal">
+                  <button className="bg-indigo-600 text-white px-8 py-4 rounded-xl text-lg hover:bg-indigo-700 shadow-xl transition">
+                    Start Researching Free
                   </button>
-                ))}
+                </SignInButton>
+             </div>
+          ) : (
+            // Dashboard View
+            <div className="max-w-4xl mx-auto space-y-8 pb-20">
+              
+              {/* Search Box Area */}
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200">
+                <label className="block text-sm font-semibold text-gray-700 mb-3 ml-1">
+                  Research Topic
+                </label>
+                <div className="flex gap-3">
+                  <input
+                    type="text"
+                    value={topic}
+                    onChange={(e) => {
+                      setTopic(e.target.value);
+                      setError("");
+                    }}
+                    placeholder="e.g. Impact of AI on Digital Marketing 2025"
+                    className="flex-1 p-4 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none text-lg text-gray-900 placeholder-gray-400 bg-gray-50"
+                    onKeyPress={(e) => e.key === "Enter" && handleGenerate()}
+                    disabled={loading}
+                  />
+                  <button
+                    onClick={handleGenerate}
+                    disabled={loading || !topic.trim()}
+                    className="bg-indigo-600 text-white px-8 py-4 rounded-xl font-medium hover:bg-indigo-700 disabled:opacity-50 transition shadow-md flex items-center gap-2"
+                  >
+                    {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Search className="w-5 h-5" />}
+                    {loading ? "Analyzing..." : "Research"}
+                  </button>
+                </div>
+                {error && <p className="text-red-500 text-sm mt-3 ml-1">{error}</p>}
               </div>
 
-              {error && (
-                <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
-                  {error}
-                </div>
-              )}
-            </div>
+              {/* Report Display Area */}
+              {report && (
+                <div className="bg-white p-8 md:p-12 rounded-2xl shadow-lg border border-gray-100 animate-fade-in">
+                  <div className="flex justify-between items-start mb-6 border-b border-gray-100 pb-4">
+                    <h2 className="text-2xl font-bold text-gray-900">{topic}</h2>
+                    <span className="bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs font-bold uppercase">
+                      Completed
+                    </span>
+                  </div>
+                  
+                  <div className="prose prose-indigo max-w-none text-gray-700">
+                    <ReactMarkdown>{report}</ReactMarkdown>
+                  </div>
 
-            {report && (
-              <div className="bg-white p-10 rounded-2xl shadow-lg border border-gray-100 animate-fade-in">
-                <div className="prose prose-indigo max-w-none">
-                  <ReactMarkdown
-                    components={{
-                      h1: ({node, ...props}) => <h1 className="text-3xl font-bold mb-4 text-gray-900" {...props} />,
-                      h2: ({node, ...props}) => <h2 className="text-2xl font-semibold mt-8 mb-3 text-gray-800" {...props} />,
-                      p: ({node, ...props}) => <p className="text-gray-700 leading-relaxed mb-4" {...props} />,
-                      ul: ({node, ...props}) => <ul className="list-disc list-inside space-y-2 mb-4" {...props} />,
-                      li: ({node, ...props}) => <li className="text-gray-700" {...props} />,
-                    }}
-                  >
-                    {report}
-                  </ReactMarkdown>
-                </div>
-
-                {sources.length > 0 && (
-                  <div className="mt-8 pt-6 border-t border-gray-200">
-                    <h3 className="font-semibold text-gray-900 mb-3">Sources:</h3>
-                    <ul className="space-y-2">
-                      {sources.map((url, i) => (
-                        <li key={i}>
+                  {sources.length > 0 && (
+                    <div className="mt-8 pt-6 border-t border-gray-100">
+                      <h3 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-gray-500" />
+                        References & Sources
+                      </h3>
+                      <div className="grid gap-2">
+                        {sources.map((url, i) => (
                           <a
+                            key={i}
                             href={url}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-indigo-600 hover:text-indigo-800 text-sm underline break-all"
+                            className="text-sm text-indigo-600 hover:text-indigo-800 hover:underline truncate bg-indigo-50 px-3 py-2 rounded-lg"
                           >
                             {url}
                           </a>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-      </main>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </main>
+      </div>
 
-      {/* Smart Upgrade / Top-up Modal */}
+      {/* Upgrade Modal (Same as before) */}
       {showUpgradeModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden relative">
-            <button 
-              onClick={() => setShowUpgradeModal(false)}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition"
-            >
-              <X className="w-6 h-6" />
-            </button>
-            
-            <div className="p-6 text-center">
-              <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Zap className="w-8 h-8 text-indigo-600 fill-indigo-600" />
-              </div>
-
-              {/* Dynamic Heading based on Tier */}
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">
-                {tier === "Pro" ? "Need more power?" : "Upgrade to Pro"}
-              </h2>
-              
-              <p className="text-gray-600 mb-6">
-                {tier === "Pro" 
-                  ? "You are already a Pro member. Running low on credits? Add another pack instantly."
-                  : "Unlock deep research mode and get 50 monthly credits to power your decisions."}
-              </p>
-
-              <div className="bg-indigo-50 rounded-xl p-4 border border-indigo-100 mb-6 text-left">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="font-semibold text-indigo-900">
-                    {tier === "Pro" ? "Credit Pack" : "Pro Plan"}
-                  </span>
-                  <span className="text-xl font-bold text-indigo-600">$10</span>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md relative overflow-hidden">
+             <button onClick={() => setShowUpgradeModal(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
+               <X className="w-6 h-6" />
+             </button>
+             <div className="p-8 text-center">
+                <div className="w-16 h-16 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Zap className="w-8 h-8 text-indigo-600 fill-indigo-600" />
                 </div>
-                <ul className="space-y-2 text-sm text-gray-600">
-                  <li className="flex items-center gap-2">
-                    <CheckCircle className="w-4 h-4 text-green-500" />
-                    +50 AI Research Credits
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <CheckCircle className="w-4 h-4 text-green-500" />
-                    Valid Lifetime (No Expiry)
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <CheckCircle className="w-4 h-4 text-green-500" />
-                    Deep Search Capability
-                  </li>
-                </ul>
-              </div>
-
-              <button 
-                onClick={handleUpgrade}
-                disabled={loading}
-                className="w-full bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-semibold py-3 rounded-xl hover:opacity-90 transition shadow-md disabled:opacity-50"
-              >
-                {loading 
-                  ? "Processing..." 
-                  : (tier === "Pro" ? "Buy 50 Credits" : "Upgrade to Pro")
-                }
-              </button>
-              <p className="text-xs text-gray-400 mt-4">
-                Secure payment powered by Stripe
-              </p>
-            </div>
+                <h2 className="text-2xl font-bold text-gray-900 mb-2">Need more credits?</h2>
+                <p className="text-gray-600 mb-6">Upgrade to Pro to continue deep researching.</p>
+                <button 
+                  onClick={handleUpgrade}
+                  disabled={loading}
+                  className="w-full bg-indigo-600 text-white font-bold py-3 rounded-xl hover:bg-indigo-700 transition"
+                >
+                  {loading ? "Processing..." : "Get 50 Credits for $10"}
+                </button>
+             </div>
           </div>
         </div>
       )}

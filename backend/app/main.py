@@ -54,6 +54,13 @@ class GenerateRequest(BaseModel):
     topic: str = Field(..., min_length=5, max_length=200, description="Research topic")
     user_id: str = Field(..., description="Clerk user ID")
 
+class HistoryItem(BaseModel):
+    user_id: str
+    topic: str
+    report: str
+    sources: list
+
+
 class GenerateResponse(BaseModel):
     """Response from /generate endpoint"""
     status: str
@@ -227,6 +234,42 @@ def verify_payment(session_id: str):
     except Exception as e:
         print(f"Payment Verification Error: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+  # --- History Endpoints ---
+
+@app.post("/history")
+async def save_history(item: HistoryItem):
+    try:
+        data = {
+            "user_id": item.user_id,
+            "topic": item.topic,
+            "report": item.report,
+            "sources": item.sources
+        }
+        # Supabase එකට Insert කිරීම
+        response = supabase.table("research_history").insert(data).execute()
+        return {"status": "saved", "data": response.data}
+    except Exception as e:
+        print(f"Error saving history: {str(e)}")
+        # Error එකක් ආවත් App එක කඩන් වැටෙන්න දෙන්න බෑ, ඒ නිසා නිකන් ඉන්නවා
+        return {"status": "error", "detail": str(e)}
+
+@app.get("/history/{user_id}")
+async def get_history(user_id: str):
+    try:
+        # අලුත් ඒවා උඩින් එන විදියට Sort කරලා ගන්නවා
+        response = supabase.table("research_history")\
+            .select("*")\
+            .eq("user_id", user_id)\
+            .order("created_at", desc=True)\
+            .execute()
+        return response.data
+    except Exception as e:
+        print(f"Error fetching history: {str(e)}")
+        return []
+
+
 
 # --- Run Locally ---
 

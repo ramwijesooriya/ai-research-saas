@@ -1,6 +1,6 @@
 """
 Production-Grade AI Research Agent
-Uses Google Gemini 1.5 Flash + Tavily Search
+Uses Google Gemini 2.5 Flash + Tavily Search
 """
 import os
 from typing import Dict, Any
