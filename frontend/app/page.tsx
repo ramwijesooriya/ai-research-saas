@@ -75,21 +75,23 @@ export default function Home() {
 
   async function handleUpgrade() {
     try {
-      setLoading(true); 
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      const res = await fetch(`${apiUrl}/create-checkout-session`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: user?.id }),
-      });
-      const data = await res.json();
-      if (data.url) window.location.href = data.url;
+      setLoading(true);
+
+      // 🛑 මෙතනට ඔයා Step 1 දී Copy කරගත්ත Link එක දාන්න
+      const lemonSqueezyUrl = "https://airesearch-pro.lemonsqueezy.com/checkout/buy/fb315899-7aa9-45a0-aca6-ef6adeb3b515"; 
+
+      // අපි මේකට User ID එක අමුණනවා (Backend එකට දැනගන්න)
+      const finalUrl = `${lemonSqueezyUrl}?checkout[custom][user_id]=${user?.id}`;
+
+      // User ව ඒ Link එකට යවනවා
+      window.location.href = finalUrl;
+
     } catch (error) {
-      alert("Payment Error");
-    } finally {
+      alert("Something went wrong!");
       setLoading(false);
     }
   }
+
 
   // --- Generate Function (With DB Save) ---
   async function handleGenerate() {
