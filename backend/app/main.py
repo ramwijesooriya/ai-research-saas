@@ -1,23 +1,20 @@
 """
 Production FastAPI Server
-Handles API requests, Database (Supabase), AI Agent, and Stripe Payments
+Handles API requests, Database (Supabase), AI Agent, and Lemon Squeezy Webhooks
 """
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 import os
+import hmac
+import hashlib
 from dotenv import load_dotenv
 from supabase import create_client, Client
-import stripe
 
 # Load environment variables
 load_dotenv()
-
-# Stripe Setup
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
 # Import your agent
 from app.agent import get_agent
@@ -60,7 +57,6 @@ class HistoryItem(BaseModel):
     report: str
     sources: list
 
-
 class GenerateResponse(BaseModel):
     """Response from /generate endpoint"""
     status: str
@@ -86,12 +82,10 @@ def get_user_profile(user_id: str):
     Get user profile details (Credits & Tier)
     """
     try:
-        # Check if user exists
         response = supabase.table("user_profiles").select("*").eq("user_id", user_id).execute()
         user_data = response.data
 
         if not user_data:
-            # If user doesn't exist yet, return default
             return {"credits": 3, "tier": "Free"}
         
         return {
@@ -161,82 +155,65 @@ async def generate_report(request: GenerateRequest):
         print(f"❌ Server Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Generation failed: {str(e)}")
 
+# --- LEMON SQUEEZY WEBHOOK (NEW) ---
 
-# --- PAYMENT ENDPOINTS (NEW) ---
-
-@app.post("/create-checkout-session")
-async def create_checkout_session(request: Request):
+@app.post("/webhook")
+async def lemon_squeezy_webhook(request: Request, x_signature: str = Header(None)):
     """
-    Create a Stripe Checkout Session for upgrading to Pro
+    Listens for Lemon Squeezy payment notifications.
+    When a payment is successful, it adds 50 credits to the user.
     """
-    try:
-        data = await request.json()
-        user_id = data.get("user_id")
+    
+    # 1. Get the raw body (message) and the secret key
+    raw_body = await request.body()
+    # IMPORTANT: Add 'LEMON_SQUEEZY_WEBHOOK_SECRET' to your Hugging Face Secrets!
+    secret = os.getenv("LEMON_SQUEEZY_WEBHOOK_SECRET", "my_super_secret_password")
+    
+    # 2. Verify Security
+    digest = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    
+    if not x_signature or not hmac.compare_digest(digest, x_signature):
+        raise HTTPException(status_code=401, detail="Invalid signature")
 
-        if not user_id:
-            raise HTTPException(status_code=400, detail="User ID is required")
+    # 3. Parse the message
+    data = await request.json()
+    event_name = data.get("meta", {}).get("event_name")
+    
+    print(f"🔔 Event Received: {event_name}")
 
-        checkout_session = stripe.checkout.Session.create(
-            payment_method_types=['card'],
-            line_items=[{
-                'price_data': {
-                    'currency': 'usd',
-                    'product_data': {
-                        'name': 'Pro Plan - 50 AI Research Credits',
-                        'description': 'Unlock deep research mode and 50 credits.',
-                    },
-                    'unit_amount': 1000,  # $10.00 (in cents)
-                },
-                'quantity': 1,
-            }],
-            mode='payment',
-            success_url=f'{FRONTEND_URL}/payment-success?session_id={{CHECKOUT_SESSION_ID}}',
-            cancel_url=f'{FRONTEND_URL}/',
-            metadata={
-                "user_id": user_id
-            }
-        )
-        return {"url": checkout_session.url}
-    except Exception as e:
-        print(f"Stripe Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/verify-payment")
-def verify_payment(session_id: str):
-    """
-    Verify payment success and add credits
-    """
-    try:
-        session = stripe.checkout.Session.retrieve(session_id)
+    # 4. Handle 'order_created'
+    if event_name == "order_created":
+        # Get the User ID sent from Frontend
+        custom_data = data.get('meta', {}).get('custom_data', {})
+        user_id = custom_data.get('user_id')
         
-        if session.payment_status == "paid":
-            user_id = session.metadata["user_id"]
-            
-            # Get current credits
-            response = supabase.table("user_profiles").select("credits").eq("user_id", user_id).execute()
-            
-            if response.data:
-                current_credits = response.data[0]["credits"]
-                new_credits = current_credits + 50
+        print(f"💰 Payment success for User: {user_id}")
+        
+        if user_id:
+            try:
+                # First, get current credits from 'user_profiles' table
+                response = supabase.table("user_profiles").select("credits").eq("user_id", user_id).execute()
                 
-                # Update credits
-                supabase.table("user_profiles").update({
-                    "credits": new_credits,
-                    "tier": "Pro"  # Optional: Mark them as Pro
-                }).eq("user_id", user_id).execute()
+                if response.data:
+                    current_credits = response.data[0]['credits']
+                    new_credits = current_credits + 50
+                    
+                    # Update credits & Tier
+                    supabase.table("user_profiles").update({
+                        "credits": new_credits, 
+                        "tier": "Pro"
+                    }).eq("user_id", user_id).execute()
+                    
+                    print(f"✅ Added 50 credits to {user_id}. New Balance: {new_credits}")
+                else:
+                    print(f"⚠️ User {user_id} not found in DB. Could not add credits.")
                 
-                return {"status": "success", "new_credits": new_credits}
-            else:
-                return {"status": "error", "message": "User not found"}
-        else:
-            return {"status": "pending"}
-            
-    except Exception as e:
-        print(f"Payment Verification Error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+            except Exception as e:
+                print(f"❌ Database Error: {str(e)}")
+                
+    return {"status": "received"}
 
-
-  # --- History Endpoints ---
+# --- History Endpoints ---
 
 @app.post("/history")
 async def save_history(item: HistoryItem):
@@ -247,18 +224,15 @@ async def save_history(item: HistoryItem):
             "report": item.report,
             "sources": item.sources
         }
-        # Supabase එකට Insert කිරීම
         response = supabase.table("research_history").insert(data).execute()
         return {"status": "saved", "data": response.data}
     except Exception as e:
         print(f"Error saving history: {str(e)}")
-        # Error එකක් ආවත් App එක කඩන් වැටෙන්න දෙන්න බෑ, ඒ නිසා නිකන් ඉන්නවා
         return {"status": "error", "detail": str(e)}
 
 @app.get("/history/{user_id}")
 async def get_history(user_id: str):
     try:
-        # අලුත් ඒවා උඩින් එන විදියට Sort කරලා ගන්නවා
         response = supabase.table("research_history")\
             .select("*")\
             .eq("user_id", user_id)\
@@ -268,10 +242,6 @@ async def get_history(user_id: str):
     except Exception as e:
         print(f"Error fetching history: {str(e)}")
         return []
-
-
-
-# --- Run Locally ---
 
 if __name__ == "__main__":
     import uvicorn
